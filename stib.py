@@ -54,7 +54,7 @@ def getStopsByLine(q = "54"):
     q=q,
     start=0,
     rows=99,
-    apikey = '093d3250222cf7bb5b664e7b2f52a22efe811eabc882d16854e6f418'
+    apikey = ''
     )
 
     resp = requests.get(url=url, params=params)
@@ -77,7 +77,7 @@ def getStopInfo(q):
     q=q,
     start=0,
     rows=99,
-    apikey = '093d3250222cf7bb5b664e7b2f52a22efe811eabc882d16854e6f418'
+    apikey = ''
     )
 
     resp = requests.get(url=url, params=params)

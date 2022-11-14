@@ -1,4 +1,5 @@
 mqtt_server: ''
+mqtt_port: ''
 mqtt_user: ''
 mqtt_password: ''
 stib_api_key: 'secret'
