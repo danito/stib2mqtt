@@ -154,7 +154,7 @@ def setStopInfo():
 
 
 stopNames = setStopInfo()
-
+    
 def getMinutes():
     global stopNames
     stop = " OR ".join(str(item) for item in stopIds)
