@@ -14,8 +14,8 @@ broker = 'localhost'
 port = 1883
 topic = "stib"
 client_id = f'python-mqtt-{random.randint(0, 1000)}'
-username = 'dan'
-password = 'mosJF26l9'
+username = 'x'
+password = ''
 stopIds = [5719,1015, 1085]
 toDay = datetime.date.today().day
 
