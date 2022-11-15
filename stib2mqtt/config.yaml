@@ -1,0 +1,12 @@
+mqtt_server: ''
+mqtt_port: ''
+mqtt_user: ''
+mqtt_password: ''
+stib_api_key: 'secret'
+lang: 'fr'
+message_lang: 'fr'
+stops:
+  - stop_id: 12345
+    line_numbers:
+      - 12
+      - 34
