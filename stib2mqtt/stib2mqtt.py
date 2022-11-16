@@ -22,6 +22,7 @@ mqtt_server = configuration['mqtt_server']
 mqtt_port = configuration['mqtt_port']
 mqtt_user = configuration['mqtt_user']
 mqtt_password = configuration['mqtt_password']
+mqtt_topic = 'stib'
 client_id = f'stib-mqtt-{random.randint(0, 1000)}'
 
 STOPS = configuration['stops']
@@ -87,7 +88,7 @@ def getStopInfos():
         StopRecords = False
     if StopRecords:
         for r in StopRecords:
-            lineId  = json.loads(r["fields"]["lineid"])
+            lineId  = r["fields"]["lineid"]
             k = "L" +  str(lineId)
             if k in LineFields:
                 destination = (r["fields"]["destination"])
@@ -109,15 +110,14 @@ def getWaitingTimes(fields):
         stopIds.append(stop['stop_id'])
         k = str(stop['stop_id']) 
         for line_id in stop['line_numbers']:
-            if line_id not in lineIds:
-                keyName= "L" + str(line_id) 
-                lineIds.append(line_id)
-                WaitingTimeFields[keyName + k + "1"]= {"arrival":0, "destination":"","gpscoordinates":"","message":"","status":"not available", "stopName":"", "timestamp":"", "vehicle_type":"", "end_of_service":True }
-                WaitingTimeFields[keyName + k + "2"]= {"arrival":0, "destination":"","gpscoordinates":"","message":"","status":"not available", "stopName":"", "timestamp":"", "vehicle_type":"", "end_of_service":True }
+            keyName= "L" + str(line_id) 
+            WaitingTimeFields[keyName + k + "1"]= {"arrival":0, "destination":"","gpscoordinates":"","message":"","status":"not available", "stopName":"", "timestamp":"", "vehicle_type":"", "end_of_service":True }
+            WaitingTimeFields[keyName + k + "2"]= {"arrival":0, "destination":"","gpscoordinates":"","message":"","status":"not available", "stopName":"", "timestamp":"", "vehicle_type":"", "end_of_service":True }
 
     q = " OR ".join(str(item) for item in stopIds)
     dataset='waiting-time-rt-production'
     StopData = getStibData(q, dataset)
+    #pprint.pprint(StopData)
     if "records" in StopData:
         StopRecords = StopData['records']
     else:
@@ -127,17 +127,17 @@ def getWaitingTimes(fields):
             p = "1"
             x = 0
             eos = True
+            av = "not available"
             pt = json.loads(r["fields"]["passingtimes"])
             pointId = r["fields"]["pointid"]
             lineId = "L" + str(r["fields"]["lineid"]) + "" + str(pointId) + p
-            print(lineId)
             if lineId in WaitingTimeFields:
-                print(pt[x])
                 destination = ""
                 message = ""
                 if "destination" in pt[x]:
                     destination = pt[x]["destination"][LANG]
                     eos = False
+                    av = "available"
                 if 'message' in pt[x]:
                     message  = pt[x]["message"][MESSAGE_LANG]
                 t = pt[x]["expectedArrivalTime"]
@@ -149,7 +149,7 @@ def getWaitingTimes(fields):
                 WaitingTimeFields[lineId]["message"] = message 
                 WaitingTimeFields[lineId]["end_of_service"] = eos 
                 WaitingTimeFields[lineId]["destination"] = destination
-                WaitingTimeFields[lineId]["available"] = destination
+                WaitingTimeFields[lineId]["status"] = av 
                 WaitingTimeFields[lineId]["stopName"] = StopFields['STOP'+str(pointId)]["stop_names"][LANG] 
                 WaitingTimeFields[lineId]["gpscoordinates"] = StopFields['STOP'+str(pointId)]["gps_coordinates"] 
                 if len(pt) > 1:
@@ -164,6 +164,7 @@ def getWaitingTimes(fields):
                     if "destination" in pt[x]:
                         destination = pt[x]["destination"][LANG]
                         eos = False
+                        av = "available"
                     if 'message' in pt[x]:
                         message  = pt[x]["message"][MESSAGE_LANG]
                     t = pt[x]["expectedArrivalTime"]
@@ -174,12 +175,14 @@ def getWaitingTimes(fields):
                     WaitingTimeFields[lineId]["timestamp"] = t 
                     WaitingTimeFields[lineId]["message"] = message 
                     WaitingTimeFields[lineId]["destination"] = destination
-                    WaitingTimeFields[lineId]["available"] = destination
+                    WaitingTimeFields[lineId]["end_of_service"] = eos 
+                    WaitingTimeFields[lineId]["status"] = av 
                     WaitingTimeFields[lineId]["stopName"] = StopFields['STOP'+str(pointId)]["stop_names"][LANG] 
                     WaitingTimeFields[lineId]["gpscoordinates"] = StopFields['STOP'+str(pointId)]["gps_coordinates"] 
          
 
-    pprint.pprint(WaitingTimeFields)
+    #pprint.pprint(WaitingTimeFields)
+    return WaitingTimeFields
 
   
 
@@ -194,34 +197,43 @@ def connect_mqtt():
     client = mqtt_client.Client(client_id)
     client.username_pw_set(mqtt_user, mqtt_password)
     client.on_connect = on_connect
-    client.connect(mqtt_server, mqtt_port)
+    client.connect(mqtt_server, int(mqtt_port))
     return client
 
 def publish(client):
     global counter
     msg_count = 0
+    lastDate = datetime.datetime.today()
+    data = getStopInfos()
     while True:
-        msg = {}
-        msg = getMinutes()
+        msg = False 
+        if  checkUpdate(lastDate):
+            data = getStopInfos()
+            lastDate = datetime.datetime.today()
+
+        msg = getWaitingTimes(data)
         if msg:
             msg = json.dumps(msg, indent=4, sort_keys=True, ensure_ascii=False)
-            result = client.publish(topic, msg)
+            result = client.publish(mqtt_topic, msg)
             status = result[0]
             if status == 0:
-                print(f"Send `{msg}` to topic `{topic}`")
+                print(f"Send `{msg}` to topic `{mqtt_topic}`")
             else:
-                print(f"Failed to send message to topic {topic}")
+                print(f"Failed to send message to topic {mqtt_topic}")
             msg_count += 1
             print(msg_count)
-        print(f"Counter {counter}")
-        if toDay != datetime.date.today().day:
-            counter = 0
-            today =  datetime.date.today().day
 
         # result: [0, 1]
         
         print("sleep")
         time.sleep(20)
+
+def checkUpdate(lastDate):
+    today = datetime.datetime.today()
+    one_week_ago = today - timedelta(days=7)
+    if lastDate < one_week_ago:
+        return True
+    return False
 
 
 def run():
@@ -233,7 +245,5 @@ def run():
 
 
 if __name__ == '__main__':
-    data = getStopInfos()
-    wt = getWaitingTimes(data)
 
-#    run()
+    run()
