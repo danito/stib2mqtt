@@ -53,6 +53,7 @@ def getStopInfos():
     lineIds = []
     StopFields = {}
     LineFields = {}
+    RouteFields = {}
     for stopId, stop in enumerate(STOPS):
         stopIds.append(stop['stop_id'])
         k = "STOP"+str(stop['stop_id']) 
@@ -61,6 +62,7 @@ def getStopInfos():
             if line_id not in lineIds:
                 keyName= "L" + str(line_id) 
                 LineFields[keyName]={"line_id":line_id}
+                RouteFields[keyName]={"line_id":line_id}
                 lineIds.append(line_id)
 
     q = " OR ".join(str(item) for item in stopIds)
@@ -95,8 +97,22 @@ def getStopInfos():
                 direction = (r["fields"]["direction"])
                 LineFields[k]["destination"] = destination
                 LineFields[k]["direction"] = direction 
+
+    dataset='gtfs-routes-production'
+    RoutesData = getStibData(q, dataset)
+    if "records" in RoutesData:  
+        RoutesRecords = RoutesData['records']
+    else:
+        RoutesRecords = False
+    if RoutesRecords:
+        for r in RoutesRecords:
+            lineId  = r["fields"]["route_short_name"]
+            k = "L" +  str(lineId)
+            if k in LineFields:
+                RouteFields[k]["route_type"] = r['fields']['route_type']
+                RouteFields[k]["route_color"] = r['fields']['route_color']
         
-    return {"stops": StopFields, "lines": LineFields}    
+    return {"stops": StopFields, "lines": LineFields, "routes": RouteFields}    
 
 
 def getWaitingTimes(fields):
@@ -105,6 +121,7 @@ def getWaitingTimes(fields):
     lineIds = []
     StopFields = fields['stops']
     LineFields = fields['lines'] 
+    RouteFields = fields['routes']
     WaitingTimeFields = {}
     for stopId, stop in enumerate(STOPS):
         stopIds.append(stop['stop_id'])
@@ -112,8 +129,10 @@ def getWaitingTimes(fields):
         for line_id in stop['line_numbers']:
             keyName= "L" + str(line_id) 
             stopName = StopFields['STOP' + k]['stop_names'][LANG]
-            WaitingTimeFields[keyName + k + "1"]= {"arrival":0, "destination":"","gpscoordinates":"","message":"","status":"not available", "stopName":stopName, "timestamp":"", "vehicle_type":"", "end_of_service":True }
-            WaitingTimeFields[keyName + k + "2"]= {"arrival":0, "destination":"","gpscoordinates":"","message":"","status":"not available", "stopName":stopName, "timestamp":"", "vehicle_type":"", "end_of_service":True }
+            routeType = RouteFields[keyName]["route_type"]
+            routeColor = RouteFields[keyName]["route_color"]
+            WaitingTimeFields[keyName + k + "1"]= {"arrival":0, "destination":"","gpscoordinates":"","message":"","status":"not available", "stopName":stopName, "timestamp":"", "vehicle_type":routeType, "route_color":routeColor, "end_of_service":True }
+            WaitingTimeFields[keyName + k + "2"]= {"arrival":0, "destination":"","gpscoordinates":"","message":"","status":"not available", "stopName":stopName, "timestamp":"", "vehicle_type":routeType, "route_color":routeColor, "end_of_service":True }
 
     q = " OR ".join(str(item) for item in stopIds)
     dataset='waiting-time-rt-production'
