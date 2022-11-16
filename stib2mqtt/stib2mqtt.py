@@ -22,7 +22,7 @@ mqtt_server = configuration['mqtt_server']
 mqtt_port = configuration['mqtt_port']
 mqtt_user = configuration['mqtt_user']
 mqtt_password = configuration['mqtt_password']
-mqtt_topic = 'stib'
+mqtt_topic = configuration['mqtt_topic']
 client_id = f'stib-mqtt-{random.randint(0, 1000)}'
 
 STOPS = configuration['stops']
