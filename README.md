@@ -43,43 +43,16 @@ Destination: Name of the destination stop
 End_of_service: true if traffic stopped
 gpscoordinates: gps coordinates of the stop
 message: Service message
+Route_color: hex val of route color
 stopName: stop name
 timestamp: the timestamp of the arrival time
-vehicle_type: not used yet
+vehicle_type: Bus or Tram
 
 ### example of output
 ```json
 {
-    "LT8231941": {
-        "arrival": 1,
-        "destination": "GARE DE BERCHEM",
-        "end_of_service": false,
-        "gpscoordinates": {
-            "latitude": 50.809427,
-            "longitude": 4.313018
-        },
-        "message": "",
-        "status": "available",
-        "stopName": "SAINT-DENIS",
-        "timestamp": "2022-11-16T12:07:00+01:00",
-        "vehicle_type": ""
-    },
-    "LT8231942": {
-        "arrival": 12,
-        "destination": "GARE DE BERCHEM",
-        "end_of_service": false,
-        "gpscoordinates": {
-            "latitude": 50.809427,
-            "longitude": 4.313018
-        },
-        "message": "",
-        "status": "available",
-        "stopName": "SAINT-DENIS",
-        "timestamp": "2022-11-16T12:18:00+01:00",
-        "vehicle_type": ""
-    },
     "LT8231961": {
-        "arrival": 4,
+        "arrival": 5,
         "destination": "DROGENBOS",
         "end_of_service": false,
         "gpscoordinates": {
@@ -87,13 +60,14 @@ vehicle_type: not used yet
             "longitude": 4.313231
         },
         "message": "",
+        "route_color": "91BEE7",
         "status": "available",
         "stopName": "SAINT-DENIS",
-        "timestamp": "2022-11-16T12:10:00+01:00",
-        "vehicle_type": ""
+        "timestamp": "2022-11-16T16:35:00+01:00",
+        "vehicle_type": "Bus"
     },
     "LT8231962": {
-        "arrival": 7,
+        "arrival": 14,
         "destination": "DROGENBOS",
         "end_of_service": false,
         "gpscoordinates": {
@@ -101,11 +75,13 @@ vehicle_type: not used yet
             "longitude": 4.313231
         },
         "message": "",
+        "route_color": "91BEE7",
         "status": "available",
         "stopName": "SAINT-DENIS",
-        "timestamp": "2022-11-16T12:13:00+01:00",
-        "vehicle_type": ""
+        "timestamp": "2022-11-16T16:44:00+01:00",
+        "vehicle_type": "Bus"
     }
+}
 ```
 ### home-assistant
 Exaple of Home-Assistant integration.
