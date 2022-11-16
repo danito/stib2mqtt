@@ -111,8 +111,9 @@ def getWaitingTimes(fields):
         k = str(stop['stop_id']) 
         for line_id in stop['line_numbers']:
             keyName= "L" + str(line_id) 
-            WaitingTimeFields[keyName + k + "1"]= {"arrival":0, "destination":"","gpscoordinates":"","message":"","status":"not available", "stopName":"", "timestamp":"", "vehicle_type":"", "end_of_service":True }
-            WaitingTimeFields[keyName + k + "2"]= {"arrival":0, "destination":"","gpscoordinates":"","message":"","status":"not available", "stopName":"", "timestamp":"", "vehicle_type":"", "end_of_service":True }
+            stopName = StopFields['STOP' + k]['stop_names'][LANG]
+            WaitingTimeFields[keyName + k + "1"]= {"arrival":0, "destination":"","gpscoordinates":"","message":"","status":"not available", "stopName":stopName, "timestamp":"", "vehicle_type":"", "end_of_service":True }
+            WaitingTimeFields[keyName + k + "2"]= {"arrival":0, "destination":"","gpscoordinates":"","message":"","status":"not available", "stopName":stopName, "timestamp":"", "vehicle_type":"", "end_of_service":True }
 
     q = " OR ".join(str(item) for item in stopIds)
     dataset='waiting-time-rt-production'
