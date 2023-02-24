@@ -82,3 +82,13 @@ class stib:
             dataset='stop-details-production'
             json_data = self.do_request(dataset, q)
             return json_data
+
+    def getRealTimeData(self, stops=None, update=False):
+        if stops:
+            stopIds = list(stops.keys())
+            lineIds = list(stops.values())
+            lineIds = list(dict.fromkeys(stops))
+            data = []
+            if update:
+
+
