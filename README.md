@@ -26,3 +26,5 @@ stop_names:
 ```
 This will publish config, attributes and state to mqtt topic homeassistant/sensor/stibLxxStopIdX/ and will be autodiscovered.
 
+##Installation
+This is a stand alone python script, not a custom component.
