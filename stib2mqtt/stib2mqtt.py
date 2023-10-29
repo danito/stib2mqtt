@@ -37,9 +37,7 @@ STOP_IDS = []
 LINE_IDS = []
 TOPIC = "homeassistant/sensor/" 
 MQTT_DATA = {}
-ATTRIBUTES = {}
-CONFIG = {}
-STATES = {}
+
 def convert_to_utc(localtime, timeformat):
     """Convert local time of Europe/Brussels of the API into UTC."""
     if localtime is None:
@@ -127,7 +125,7 @@ class StibData:
         return {"stop_ids" : self.stop_ids, "stop_fields" : self.stop_fields}
     
     async def get_passing_times(self, stop_ids):
-        """Get the stop ids from the stop name."""
+        """Get the passing time data from the stop ids."""
         q = " OR ".join('pointid like "' + ''.join(i for i in str(item) if i.isdigit()) + '"' for item in stop_ids)
         dataset='waiting-time-rt-production'
         stib_data = await self.stib_api.get_stib_data(dataset, q)
@@ -174,7 +172,7 @@ class StibData:
         return {"line_ids" : line_ids, "passing_times" : passing_times}
     
     async def get_lines_by_stops(self, stop_ids):
-        """Get the stop ids from the stop name."""
+        """Get lines by stop ids."""
         q = " OR ".join('points like "' + ''.join(i for i in str(item) if i.isdigit()) + '"' for item in stop_ids)
         dataset='stops-by-line-production'
         stib_data = await self.stib_api.get_stib_data(dataset, q)
@@ -190,7 +188,7 @@ class StibData:
         return {'lines': lines, 'line_details' : line_details}
     
     async def get_routes_by_lines(self, line_ids):
-        """Get the stop ids from the stop name."""
+        """Get route details by line ids."""
         q = " OR ".join('route_short_name like "' + ''.join(i for i in str(item) if i.isdigit()) + '"' for item in line_ids)
         dataset='gtfs-routes-production'
         stib_data = await self.stib_api.get_stib_data(dataset, q)
@@ -206,7 +204,6 @@ class StibData:
         return route_details
     
 class STIBApi:
-   
     async def get_stib_data(self, dataset, query, session=None):
         selfcreatedsession = False
         self.session = session
@@ -227,11 +224,10 @@ class STIBApi:
         if selfcreatedsession is True:
                 await common.close()
         return result
-            
-
+        
 class CommonFunctions:
-    """A class for common functions."""
-
+    """A class for common functions. """
+    """inspired by pydelijn. """
     def __init__(self, session):
         """Initialize the class."""
         self.session = session
