@@ -9,13 +9,7 @@ lang: 'fr' # fr or nl
 message_lang: 'fr' # fr, nl, or en
 
 # https://www.stib-mivb.be/horaires-dienstregeling2.html?l=fr&_line=T82&_directioncode=V&_stop=3194
-stops:
-  - stop_id: 3194
-    line_numbers:
-      - 50
-      - T82
-  - stop_id: 5219
-    line_numbers:
-      - 54
-      - 97
-      - 74
+stop_names:
+  - 'SAINT DENIS'
+  - 'MAX WALLER'
+  - 'FOREST CENTRE'
