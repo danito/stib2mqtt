@@ -2,27 +2,30 @@ import json
 import pprint
 import requests
 import datetime
+import yaml
+import logging
+import asyncio
+import async_timeout
+import aiohttp
+from datetime import datetime
+import pytz
+import datetime
 from datetime import timedelta
 from datetime import timezone
 from dateutil import parser
-import pytz
 from paho.mqtt import client as mqtt_client
 import random
 import time
-import yaml
-from zipfile import ZipFile
-from io import BytesIO
-import pandas as pd
-import sqlite3
 
-
-with open('config.yaml', 'r') as file:
+LOGGER = logging.getLogger(__name__)
+with open('config.yml', 'r') as file:
     configuration = yaml.safe_load(file)
 
-#STIB_API = "https://data.stib-mivb.be/api/records/1.0/search/"
-STIB_API = "https://stibmivb.opendatasoft.com/api/explore/v2.1/catalog/datasets/"
-
+STIB_API = "https://stibmivb.opendatasoft.com/api/explore/v2.1/catalog/datasets"
 STIB_API_KEY = configuration['stib_api_key']
+LANG = configuration['lang']
+MESSAGE_LANG = configuration['message_lang']
+STOP_NAMES = configuration['stop_names']
 mqtt_server = configuration['mqtt_server']
 
 mqtt_port = configuration['mqtt_port']
@@ -30,450 +33,54 @@ mqtt_user = configuration['mqtt_user']
 mqtt_password = configuration['mqtt_password']
 mqtt_topic = configuration['mqtt_topic']
 client_id = f'stib-mqtt-{random.randint(0, 1000)}'
-
-STOPS = configuration['stops']
-STS = configuration['test']
-STOP_NAMES = configuration['stop_names']
-
-LANG = configuration['lang']
-MESSAGE_LANG = configuration['message_lang']
-
-def check_live(url):
-    #print(url)
-    try:
-        #print('try')
-        r = requests.get(url)
-        live = r.ok
-        #print(r.status_code)
-        if (r.status_code == 400):
-           live = True 
-    except requests.ConnectionError as e:
-        print("ERROR")
-        
-        print(e)
-        if 'MaxRetryError' not in str(e.args) or 'NewConnectionError' not in str(e.args):
-            raise
-        if "[Errno 8]" in str(e) or "[Errno 11001]" in str(e) or ["Errno -2"] in str(e):
-            print('DNSLookupError')
-            live = False
+STOP_IDS = []
+LINE_IDS = []
+TOPIC = "homeassistant/sensor/" 
+MQTT_DATA = {}
+ATTRIBUTES = {}
+CONFIG = {}
+STATES = {}
+def convert_to_utc(localtime, timeformat):
+    """Convert local time of Europe/Brussels of the API into UTC."""
+    if localtime is None:
+        return None
+    if timeformat is None:
+        timeformat = "%Y-%m-%dT%H:%M:%S"
+    localtimezone = pytz.timezone("Europe/Brussels")
+    localtimenaive = datetime.strptime(localtime, timeformat)
+    dtlocal = localtimezone.localize(localtimenaive)
+    dtutc = dtlocal.astimezone(pytz.utc)
+    return dtutc
+def setAttributes(stop_id, line_id, pt_id, attributes):
+    if stop_id in ATTRIBUTES:
+        if line_id in ATTRIBUTES[stop_id]:
+            ATTRIBUTES[stop_id][line_id][pt_id].update(attributes)
         else:
-            raise
-    except:
-        raise
-    #print(live)
-    return live
-
-def getStibData(q, dataset):
-    #print(q)    
-    #print(dataset)    
-    url = STIB_API + dataset + "/records"
-    params = dict(
-    where=q,
-    start=0,
-    rows=99,
-    apikey = STIB_API_KEY
-    )
-    data = [] 
-    try:
-        r = requests.get(url=url, params=params)
-        #print(r.request.url)
-        data = r.json()
-        #if "stop-details-production" in dataset:
-            #print(data)
-        live = r.ok
-    except requests.ConnectionError as e:
-        
-        print("ERROR in StibData")
-        if 'MaxRetryError' not in str(e.args) or 'NewConnectionError' not in str(e.args):
-            print("MaxRetry")
-            raise
-        if "[Errno 8]" in str(e) or "[Errno 11001]" in str(e) or "[Errno -2]" or "[Errno 3]" in str(e):
-            print('DNSLookupError')
-            live = False
+            ATTRIBUTES[stop_id][line_id][pt_id] = attributes
+    else:
+        ATTRIBUTES[stop_id] = {[line_id][pt_id] : attributes}
+def setConfig(stop_id, line_id, config):
+    if stop_id in CONFIG:
+        if line_id in CONFIG[stop_id]:
+            CONFIG[stop_id][line_id].update(config)
         else:
-            raise
-    except:
-        raise
-    #print(live)
-    return data
-
-def getGtfsFiles():
-    dataset = "gtfs-files-production"
-    q = ""
-    StopData = getStibData(q, dataset)
-    if StopData and "results" in StopData:
-        for r in StopData['results']:
-            print(r['file']['filename'])
-            response = requests.get(r['file']['url'])
-            with open(r['file']['filename'], mode="wb") as file:
-                file.write(response.content)
-def updateDBTrips():
-    data = pd.read_csv('trips.txt')
-    trips = data.to_dict('records')
-    connection = sqlite3.connect("db.sqlite")
-    cursor = connection.cursor()
-    for trip in trips:
-        did  = trip['id'] = None 
-        route_id = trip['route_id']
-        service_id = trip['service_id']
-        trip_id = trip['trip_id']
-        trip_headsign = trip["trip_headsign"]
-        direction_id= trip['direction_id']
-        block_id = trip["block_id"]
-        shape_id = trip["shape_id"]
-        trips_tp = [did,route_id,service_id,trip_id,trip_headsign,direction_id,block_id,shape_id]
-        #fields = ', '.join('%s' for _ in len(trips_tp))
-        result = cursor.execute("INSERT OR REPLACE INTO trips VALUES (NULL, ?, ?, ?, ?, ?, ?, ?);", (route_id, service_id, trip_id, trip_headsign, direction_id, block_id, shape_id,) )
-        print(result)
-    connection.commit()
-    return False
-
-def updateDBStopTimes():
-    data = pd.read_csv('stop_times.txt')
-    trips = data.to_dict('records')
-    connection = sqlite3.connect("db.sqlite")
-    cursor = connection.cursor()
-    #trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type   
-    for trip in trips:
-        trip_id = trip['trip_id']
-        arrival_time = trip['arrival_time']
-        departure_time = trip['departure_time']
-        stop_id = trip["stop_id"]
-        stop_sequence = trip['stop_sequence']
-        pickup_type = trip["pickup_type"]
-        drop_off_type = trip["drop_off_type"]
-        result = cursor.execute("INSERT OR REPLACE INTO stop_times VALUES (NULL, ?, ?, ?, ?, ?, ?, ?);", (trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type) )
-        print(result)
-    connection.commit()
-    return False
-
-def updateDBRoutes():
-    data = pd.read_csv('routes.txt')
-    trips = data.to_dict('records')
-    connection = sqlite3.connect("db.sqlite")
-    cursor = connection.cursor()
-    #route_id,route_short_name,route_long_name,route_desc,route_type,route_url,route_color,route_text_color
-    for trip in trips:
-        route_id = trip['route_id']
-        route_short_name = trip['route_short_name']
-        route_long_name= trip['route_long_name']
-        route_desc= trip["route_desc"]
-        route_type= trip['route_type']
-        route_url= trip["route_url"]
-        route_color= trip["route_color"]
-        route_text_color= trip["route_text_color"]
-        result = cursor.execute("INSERT OR REPLACE INTO routes VALUES (NULL, ?, ?, ?, ?, ?, ?, ?,?);", (route_id,route_short_name,route_long_name,route_desc,route_type,route_url,route_color,route_text_color) )
-        print(result)
-    connection.commit()
-    return False
-
-def updateDBStops():
-    data = pd.read_csv('stops.txt')
-    trips = data.to_dict('records')
-    connection = sqlite3.connect("db.sqlite")
-    cursor = connection.cursor()
-    #route_id,route_short_name,route_long_name,route_desc,route_type,route_url,route_color,route_text_color
-    for trip in trips:
-        stop_id = trip["stop_id"]
-        stop_code = trip["stop_code"]
-        stop_name = trip["stop_name"]
-        stop_desc = trip["stop_desc"]
-        stop_lat = trip["stop_lat"]
-        stop_lon = trip["stop_lon"]
-        zone_id = trip["zone_id"]
-        stop_url = trip["stop_url"]
-        location_type = trip["location_type"]
-        parent_station = trip["parent_station"]
-        result = cursor.execute("INSERT OR REPLACE INTO stops VALUES (NULL, ?, ?, ?, ?, ?, ?,?, ?, ?,?);", (stop_id, stop_code, stop_name, stop_desc, stop_lat, stop_lon, zone_id, stop_url, location_type, parent_station) )
-        print(result)
-    connection.commit()
-    return False
-
-def updateDBCalendar():
-    service = "calendar"
-    data = pd.read_csv(service + '.txt')
-    trips = data.to_dict('records')
-    connection = sqlite3.connect("db.sqlite")
-    print(trips)
-    cursor = connection.cursor()
-    #service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date
-    for trip in trips:
-        service_id = trip["service_id"] 
-        monday = trip["monday"] 
-        tuesday = trip["tuesday"] 
-        wednesday = trip["wednesday"] 
-        thursday = trip["thursday"] 
-        friday = trip["friday"] 
-        saturday = trip["saturday"] 
-        sunday = trip["sunday"] 
-        start_date = trip["start_date"] 
-        end_date = trip["end_date"] 
-        result = cursor.execute("INSERT OR REPLACE INTO calendar VALUES ( ?, ?, ?, ?, ?, ?,?, ?, ?,?);", (service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date) )
-        print(result)
-    connection.commit()
-    return False
-
-
-
-def getStopInfos():
-    #getGtfsFiles()
-    #updateDB() 
-    #updateDBStopTimes() 
-    #updateDBRoutes() 
-    #updateDBStops() 
-    #updateDBCalendar()
-    dataset='stop-details-production'
-    stop_names = []
-    for stop, stop_name in enumerate(STOP_NAMES):
-        stop_names.append(stop_name)
-    q = " OR ".join(' name like "' + item + '"' for item in stop_names)
-    StopData = getStibData(q, dataset)
-    stopIds = []
-    lineIds = []
-    StopFields = {}
-    LineFields = {}
-    RouteFields = {}
-
-    if StopData and "results" in StopData:
-        StopRecords = StopData['results']
+            CONFIG[stop_id][line_id] = config
     else:
-        StopRecords = False
-    if StopRecords:
-        for r in StopRecords:
-            stopsName  = json.loads(r["name"])
-            stopId = r["id"]
-            stopIds.append(stopId)
-            gpscoordinates = json.loads(r['gpscoordinates']) 
-            k = ''.join(i for i in str(stopId) if i.isdigit())
-            k = "STOP" + k
-            StopFields[k] = {"stop_id" : stopId, "stop_names" : stopsName, "gps_coordinates" : gpscoordinates }
-
-    return {"stops": StopFields, "lines": LineFields, "routes": RouteFields, 'stopids' : stopIds}    
-    return (StopFields)
-    # get line numbers by stop
-
- 
-def getStopInfosOld():
-    stopIds = []
-    lineIds = []
-    StopFields = {}
-    LineFields = {}
-    RouteFields = {}
-    for stopId, stop in enumerate(STOPS):
-        stopIds.append(stop['stop_id'])
-        k = ''.join(i for i in str(stop['stop_id']) if i.isdigit())
-        k = "STOP" +  k
-        StopFields[k] = {"stop_id":stop['stop_id']}
-        for line_id in stop['line_numbers']:
-            if line_id not in lineIds:
-                keyName= "L" + str(line_id) 
-                LineFields[keyName]={"line_id":line_id}
-                RouteFields[keyName]={"line_id":line_id}
-                lineIds.append(line_id)
-
-    q = " OR ".join(' id = "' + str(item) + '"' for item in stopIds)
-    dataset='stop-details-production'
-    StopData = getStibData(q, dataset)
-    if StopData and "results" in StopData:
-        StopRecords = StopData['results']
+        CONFIG[stop_id] = {[line_id] : config}
+def setState(stop_id, line_id, state):
+    if stop_id in STATES:
+        if line_id in STATES[stop_id]:
+            STATES[stop_id][line_id].update(state)
+        else:
+            STATES[stop_id][line_id] = state
     else:
-        StopRecords = False
-    if StopRecords:
-        for r in StopRecords:
-            stopsName  = json.loads(r["name"])
-            #print("STOPSNAME " +  r["name"] + " " + r["id"])
-            stopId = r["id"]
-            gpscoordinates = json.loads(r['gpscoordinates']) 
-            k = "STOP" + str(stopId)
-            StopFields[k]["stop_names"] = stopsName
-            StopFields[k]["gps_coordinates"] = gpscoordinates 
-    else: return []
-            
-    q = " OR ".join('lineid = "' + str(item) + '"' for item in lineIds)
-    dataset='stops-by-line-production'
-    StopData = getStibData(q, dataset)
-    if "results" in StopData:
-        StopRecords = StopData['results']
-    else:
-        StopRecords = False
-    if StopRecords:
-        for r in StopRecords:
-            lineId  = r["lineid"]
-            k = "L" +  str(lineId)
-            if k in LineFields:
-                destination = (r["destination"])
-                direction = (r["direction"])
-                LineFields[k]["destination"] = destination
-                LineFields[k]["direction"] = direction 
+        STATES[stop_id] = {[line_id] : state}
 
-    q = " OR ".join('route_short_name = "' + str(item) + '"' for item in lineIds)
-    dataset='gtfs-routes-production'
-    RoutesData = getStibData(q, dataset)
-    if "results" in RoutesData:  
-        RoutesRecords = RoutesData['results']
-    else:
-        RoutesRecords = False
-    if RoutesRecords:
-        for r in RoutesRecords:
-            lineId  = r["route_short_name"]
-            k = "L" +  str(lineId)
-            if k in LineFields:
-                RouteFields[k]["route_type"] = r['route_type']
-                RouteFields[k]["route_color"] = r['route_color']
-        
-    return {"stops": StopFields, "lines": LineFields, "routes": RouteFields, "lineIds" : lineIds}    
-
-
-def getWaitingTimes(fields):
-    StopFields = fields['stops']
-    StopIds = fields["stopids"]
-    #q = " OR ".join(' pointid like "' + item + '"' for item in StopIds)
-    q = " OR ".join('pointid like "' + ''.join(i for i in str(item) if i.isdigit()) + '"' for item in StopIds)
-    dataset='waiting-time-rt-production'
-    StopData = getStibData(q, dataset)
-    results = StopData['results']
-    #pprint.pprint(results)
-    lineIds = []
-    WaitingTimeFields = {}
-    for r in results:
-        k = "STOP" + str(r['pointid'])
-        l = "L" + r['lineid']       
-        passingtimes = json.loads(r['passingtimes'])
-        for pt in passingtimes:
-            t = pt["expectedArrivalTime"]
-            now = pytz.utc.normalize(pytz.utc.localize(datetime.datetime.utcnow()))
-            ttt = datetime.datetime.fromisoformat(t)
-            tmp = pytz.utc.normalize(ttt)
-            minutes = round( (tmp-now).total_seconds()/60)
-            pt['minutes'] = minutes
-            if "pt" in StopFields[k]:
-                StopFields[k]["pt"].append(pt)
-            else:
-                StopFields[k]["pt"] =  [pt] 
-
-        if r['lineid'] not in lineIds:
-            lineIds.append(r['lineid'])
-    #pprint.pprint(StopFields)
-    q = " OR ".join(' route_short_name like "' + item + '"' for item in lineIds)
-    dataset='gtfs-routes-production'
-    StopData = getStibData(q, dataset)
-    results = StopData['results']
-    LineFields = {}
-    for r in results:
-        LineFields[r['route_short_name']] = {"route_short_name" : r["route_short_name"], "route_long_name" :  r['route_long_name'], "route_type" : r['route_type'], "route_color" : r['route_color'] }
-    #pprint.pprint(LineFields)
-    for stop, r  in StopFields.items():
-        if "pt" in r:
-            for pt in r['pt']:
-                if pt['lineId'] in LineFields:
-                    pt['route'] = LineFields[pt['lineId']]
-                else:
-                    print('no route for ' + pt['lineId'])
-    #pprint.pprint(StopFields)
-    return StopFields
-
-def getWaitingTimesOld(fields):
-    #print(fields)
-    if (len(fields) == 0 ):
-        return False
+def diff_in_minutes(t):
     now = pytz.utc.normalize(pytz.utc.localize(datetime.datetime.utcnow()))
-    stopIds = []
-    lineIds = []
-    StopFields = fields['stops']
-    LineFields = fields['lines'] 
-    RouteFields = fields['routes']
-    WaitingTimeFields = {}
-    for stopId, stop in enumerate(STOPS):
-        stopIds.append(stop['stop_id'])
-        k = str(stop['stop_id']) 
-        for line_id in stop['line_numbers']:
-            keyName= "L" + str(line_id) 
-            if "stop_names" in StopFields['STOP' + k]:
-                stopName = StopFields['STOP' + k]['stop_names'][LANG]
-            else:
-                stopName = "UNKNOWN"
-                
-            routeType = RouteFields[keyName]["route_type"]
-            routeColor = RouteFields[keyName]["route_color"]
-            WaitingTimeFields[keyName + k + "1"]= { "p":"1","arrival":0, "destination":"","gpscoordinates":"","message":"","status":"not available", "stopName":stopName, "timestamp":"", "vehicle_type":routeType, "route_color":routeColor, "end_of_service":True, 'line':str(line_id) }
-            WaitingTimeFields[keyName + k + "2"]= {"p":"2","arrival":0, "destination":"","gpscoordinates":"","message":"","status":"not available", "stopName":stopName, "timestamp":"", "vehicle_type":routeType, "route_color":routeColor, "end_of_service":True, 'line':str(line_id) }
-
-    q = " OR ".join('pointid = "' + ''.join(i for i in str(item) if i.isdigit()) + '"' for item in stopIds)
-    dataset='waiting-time-rt-production'
-    StopData = getStibData(q, dataset)
-    #pprint.pprint(StopData)
-    if "results" in StopData:
-        StopRecords = StopData['results']
-    else:
-        StopRecords = False
-    if StopRecords:
-        for r in StopRecords:
-            p = "1"
-            x = 0
-            eos = True
-            av = "not available"
-            pt = json.loads(r["passingtimes"])
-            pointId = r["pointid"]
-            lineId = "L" + str(r["lineid"]) + "" + str(pointId) + p
-            if lineId in WaitingTimeFields:
-                destination = ""
-                message = ""
-                if "destination" in pt[x]:
-                    destination = pt[x]["destination"][LANG]
-                    eos = False
-                    av = "available"
-                if 'message' in pt[x]:
-                    message  = pt[x]["message"][MESSAGE_LANG]
-                t = pt[x]["expectedArrivalTime"]
-                ttt = datetime.datetime.fromisoformat(t)
-                tmp = pytz.utc.normalize(ttt)
-                minutes = round( (tmp-now).total_seconds()/60)
-                WaitingTimeFields[lineId]["line"] = str(r["lineid"])
-                WaitingTimeFields[lineId]["arrival"] = minutes
-                WaitingTimeFields[lineId]["p"] = p 
-                WaitingTimeFields[lineId]["timestamp"] = t 
-                WaitingTimeFields[lineId]["message"] = message 
-                WaitingTimeFields[lineId]["end_of_service"] = eos 
-                WaitingTimeFields[lineId]["destination"] = destination
-                WaitingTimeFields[lineId]["status"] = av 
-                WaitingTimeFields[lineId]["stopName"] = StopFields['STOP'+str(pointId)]["stop_names"][LANG] 
-                WaitingTimeFields[lineId]["gpscoordinates"] = StopFields['STOP'+str(pointId)]["gps_coordinates"] 
-                if len(pt) > 1:
-                    p = "2"
-                    x = 1
-                    eos = True
-                    pt = json.loads(r["passingtimes"])
-                    pointId = r["pointid"]
-                    lineId = "L" + str(r["lineid"]) + "" + str(pointId) + p
-                    message= ""
-                    destination = ""
-                    if "destination" in pt[x]:
-                        destination = pt[x]["destination"][LANG]
-                        eos = False
-                        av = "available"
-                    if 'message' in pt[x]:
-                        message  = pt[x]["message"][MESSAGE_LANG]
-                    t = pt[x]["expectedArrivalTime"]
-                    ttt = datetime.datetime.fromisoformat(t)
-                    tmp = pytz.utc.normalize(ttt)
-                    minutes = round( (tmp-now).total_seconds()/60)
-                    WaitingTimeFields[lineId]["line"] = str(r["lineid"])
-                    WaitingTimeFields[lineId]["arrival"] = minutes
-                    WaitingTimeFields[lineId]["timestamp"] = t 
-                    WaitingTimeFields[lineId]["message"] = message 
-                    WaitingTimeFields[lineId]["destination"] = destination
-                    WaitingTimeFields[lineId]["end_of_service"] = eos 
-                    WaitingTimeFields[lineId]["status"] = av 
-                    WaitingTimeFields[lineId]["p"] = p 
-                    WaitingTimeFields[lineId]["stopName"] = StopFields['STOP'+str(pointId)]["stop_names"][LANG] 
-                    WaitingTimeFields[lineId]["gpscoordinates"] = StopFields['STOP'+str(pointId)]["gps_coordinates"] 
-         
-
-    #pprint.pprint(WaitingTimeFields)
-    return WaitingTimeFields
-
-  
-
+    iso = datetime.datetime.fromisoformat(t)
+    tmp = pytz.utc.normalize(iso)
+    return round( (tmp-now).total_seconds()/60)
 
 def connect_mqtt():
     def on_connect(client, userdata, flags, rc):
@@ -487,130 +94,389 @@ def connect_mqtt():
     client.on_connect = on_connect
     client.connect(mqtt_server, int(mqtt_port))
     return client
+class StibData:
+    """A class to get passage information."""
+
+    def __init__(self, session=None):
+        """Initialize the class."""
+        self.session = session
+        self.stib_api = STIBApi()
+        self.stop_ids= []
+        self.stop_fields = {}
+        self.state = {}
+        self.config = {}
+        self.attributes = {}
+
+    async def get_stopIds(self, stopnames):
+        """Get the stop ids from the stop name."""
+        stop_names = []
+        for stop, stop_name in enumerate(stopnames):
+               stop_names.append(stop_name)
+        q = " OR ".join(' name like "' + item + '"' for item in stop_names)
+        dataset='stop-details-production'
+        stop_data = await self.stib_api.get_stib_data(dataset, q)
+        if stop_data is not None and 'results' in stop_data:
+            for r in stop_data['results']:
+                stop_id = r['id']
+                k = ''.join(i for i in str(stop_id) if i.isdigit())
+                k = str(k)
+                stop_name = json.loads(r["name"])
+                stop_gps  = json.loads(r['gpscoordinates'])
+                self.stop_ids.append(k)
+                self.stop_fields[k] = {"stop_id" : stop_id, "stop_names" : stop_name, "gps_coordinates" : stop_gps }
+        return {"stop_ids" : self.stop_ids, "stop_fields" : self.stop_fields}
+    
+    async def get_passing_times(self, stop_ids):
+        """Get the stop ids from the stop name."""
+        q = " OR ".join('pointid like "' + ''.join(i for i in str(item) if i.isdigit()) + '"' for item in stop_ids)
+        dataset='waiting-time-rt-production'
+        stib_data = await self.stib_api.get_stib_data(dataset, q)
+        line_ids = []
+        passing_times = {}
+        stops = {}
+        if stib_data is not None and 'results' in stib_data:
+            for r in stib_data['results']:
+                passingtimes = json.loads(r['passingtimes'])
+                stop_id = str(r['pointid'])
+                line_id = str(r['lineid'])
+                line_ids.append(line_id)
+                stop_pt = []
+                x = 0
+                
+                for pt in passingtimes:
+                    x = x + 1
+                    key ="NstibL"+ line_id + stop_id + str(x)
+                    t = pt["expectedArrivalTime"]
+                    pt['minutes'] = diff_in_minutes(t)
+                    stop_pt.append(pt)
+                    message = ""
+                    end_of_service = False
+                    if "message" in pt:
+                        mesage = pt['message'][MESSAGE_LANG]
+                        if len(passing_times) < 2:
+                            end_of_service = True
+                    destination = ""
+                    if "destination" in pt:
+                        destination = pt["destination"][LANG]
+                    pt['attributes'] =  {                   
+                    "message" : message, 
+                    "destination" : destination,
+                    "line_id" : line_id,
+                    "stop_id" : stop_id,
+                    "end_of_service" : end_of_service
+                    }                        
+                    
+                    
+                if stop_id not in passing_times:
+                    passing_times[stop_id] = {line_id : stop_pt}
+                else:
+                    passing_times[stop_id].update({line_id : stop_pt})
+        return {"line_ids" : line_ids, "passing_times" : passing_times}
+    
+    async def get_lines_by_stops(self, stop_ids):
+        """Get the stop ids from the stop name."""
+        q = " OR ".join('points like "' + ''.join(i for i in str(item) if i.isdigit()) + '"' for item in stop_ids)
+        dataset='stops-by-line-production'
+        stib_data = await self.stib_api.get_stib_data(dataset, q)
+        lines = []
+        line_details = {}
+        if stib_data is not None and 'results' in stib_data:
+            for r in stib_data['results']:
+                line_id = str(r['lineid'])
+                direction = r['direction']
+                destination = json.loads(r['destination'])
+                lines.append(line_id)
+                line_details[line_id] = {'line_id': line_id, 'direction': direction, 'destination': destination}
+        return {'lines': lines, 'line_details' : line_details}
+    
+    async def get_routes_by_lines(self, line_ids):
+        """Get the stop ids from the stop name."""
+        q = " OR ".join('route_short_name like "' + ''.join(i for i in str(item) if i.isdigit()) + '"' for item in line_ids)
+        dataset='gtfs-routes-production'
+        stib_data = await self.stib_api.get_stib_data(dataset, q)
+        lines = []
+        route_details = {}
+        if stib_data is not None and 'results' in stib_data:
+            for r in stib_data['results']:
+                line_id = str(r['route_short_name'])
+                route_long_name = r['route_long_name']
+                route_type = r['route_type']
+                route_color = r['route_color']
+                route_details[line_id] = {'route_short_name': line_id, 'route_long_name' : route_long_name, 'route_type' : route_type, 'route_color' : route_color }
+        return route_details
+    
+class STIBApi:
+   
+    async def get_stib_data(self, dataset, query, session=None):
+        selfcreatedsession = False
+        self.session = session
+        result = None
+        if self.session is None:
+            selfcreatedsession = True
+        params = dict(
+            where=query,
+            start=0,
+            rows=99,
+            apikey = STIB_API_KEY
+         )
+        endpoint = "{}/{}/records".format(
+            STIB_API, dataset
+        )
+        common = CommonFunctions(self.session)
+        result = await common.api_call(endpoint, params)
+        if selfcreatedsession is True:
+                await common.close()
+        return result
+            
+
+class CommonFunctions:
+    """A class for common functions."""
+
+    def __init__(self, session):
+        """Initialize the class."""
+        self.session = session
+
+    async def api_call(self, endpoint, params):
+        """Call the API."""
+        data = None
+        if self.session is None:
+            self.session = aiohttp.ClientSession()
+        try:
+            async with async_timeout.timeout(5):
+                LOGGER.debug("Endpoint URL: %s", str(endpoint))
+                response = await self.session.get(url=endpoint, params=params)
+                if response.status == 200:
+                    try:
+                        data = await response.json()
+                    except ValueError as exception:
+                        message = "Server gave incorrect data"
+                        raise Exception(message) from exception
+
+                elif response.status == 401:
+                    message = "401: Acces token might be incorrect"
+                    raise HttpException(message, await response.text(), response.status)
+
+                elif response.status == 404:
+                    message = "404: incorrect API request"
+                    raise HttpException(message, await response.text(), response.status)
+
+                else:
+                    message = f"Unexpected status code {response.status}."
+                    raise HttpException(message, await response.text(), response.status)
+
+        except aiohttp.ClientError as error:
+            LOGGER.error("Error connecting to Stib API: %s", error)
+        except asyncio.TimeoutError as error:
+            LOGGER.debug("Timeout connecting to Stib API: %s", error)
+        return data
+
+    async def close(self):
+        """Close the session."""
+        await self.session.close()
+
+
+class HttpException(Exception):
+    """HTTP exception class with message text, and status code."""
+
+    def __init__(self, message, text, status_code):
+        """Initialize the class."""
+        super().__init__(message)
+        self.status_code = status_code
+        self.text = text
+
+def init():
+
+    stop_ids = asyncio.run(StibData().get_stopIds(STOP_NAMES))
+    stop_fields = stop_ids["stop_fields"]
+    for s in stop_ids['stop_ids']:
+        if s not in STOP_IDS:
+            STOP_IDS.append(str(s))
+   
+    pt = asyncio.run(StibData().get_passing_times(stop_ids['stop_ids']))
+    for l in pt['line_ids']:
+        if l not in LINE_IDS:
+            LINE_IDS.append(str(l))
+        
+    lines = asyncio.run(StibData().get_lines_by_stops(stop_ids['stop_ids']))
+    routes = asyncio.run(StibData().get_routes_by_lines(pt['line_ids']))
+    passing_times = pt['passing_times']
+    #print(json.dumps(passing_times))
+    attributes = {                   
+                        "message" : None, 
+                        "destination" : None,
+                        "device_class": None,
+                        "timestamp" : None,
+                        "line_id" : None,
+                        "stop_id" : None,
+                        "end_of_service" : None,
+                        "route_color" : None,
+                        "route" : None,
+                        'route_type': None,
+                        "longitude" : None,
+                        "latitude": None,
+                        }                        
+                    
+    config = {
+                        "icon" : "mdi:bus",                        
+                        "device_class": "duration",
+                        "json_attributes_template": "{{value_json | default('') | to_json}}",
+                        "json_attributes_topic": None,
+                        "state_topic": None,
+                        "command_topic": None,
+                        "unique_id": None,
+                        "unit_of_measurement": 'min',
+                        "value_template": '{{value_json.arrival}}',
+                        "device" : {}
+                    }
+    state =  {
+                        "arrival": None
+                    }
+    
+    for s in STOP_IDS:
+        stop_name = stop_fields[s]['stop_names'][LANG]
+        latitude = stop_fields[s]["gps_coordinates"]["latitude"]
+        longitude = stop_fields[s]["gps_coordinates"]["longitude"]
+        if s in passing_times:
+            for i,l in passing_times[s].items():
+                x = 0 
+                for idx, p in enumerate(l):
+                    x = 0                    
+                    x = x + 1
+                    key = "stibL" + str(i) + str(s) + str(x)
+                    c = config.copy()
+                    c.update(
+                        {
+                            "json_attributes_topic": TOPIC + key + "/attribute",
+                            "state_topic": TOPIC + key + "/state",
+                            "command_topic": TOPIC + key + "/set",
+                            "unique_id": key,
+                        }
+                    )
+                    route = ""
+                    route_color = ""
+                    route_type = "bus"
+                    if i in routes:
+                        route = routes[i]["route_long_name"]
+                        route_color = routes[i]["route_color"]
+                        route_type = routes[i]["route_type"]
+
+                    c.update({
+                        "icon" : "mdi:" + route_type.lower(),
+                        "device" : {
+                            "identifiers" : [key],
+                            "name" : "STIB " + stop_name + " (" + str(s) + ") " + route_type + " " + i + " " + str(x)
+                        }
+                        
+                        })
+                    p['attributes'].update(
+                        {
+                            "stop_name" : stop_name,
+                            "latitude" : latitude,
+                            "longitude" : longitude,
+                            "route" : route,
+                            'route_color' : route_color,
+                            'timestamp' :  p["expectedArrivalTime"],
+                        }
+                    )
+                    m = {
+                        "arrival" : diff_in_minutes(p["expectedArrivalTime"])
+                    }
+                    if key not in MQTT_DATA:
+                        MQTT_DATA[key] ={
+                            "attributes" : p["attributes"],
+                            "config" : c,
+                            "state" : m
+                            }
+                    else:
+                        if "attributes" not in MQTT_DATA[key]:
+                            MQTT_DATA[key]['attributes'] = p["attributes"].copy()
+                            MQTT_DATA[key]['config'] = c.copy()
+                            MQTT_DATA[key]['state'] = m.copy()
+                        else:
+                            MQTT_DATA[key]['attributes'].update(p["attributes"])
+                            MQTT_DATA[key]['config'].update(c)
+                            MQTT_DATA[key]['state'].update(m)
 
 def publish(client):
-    global counter
-    msg_count = 0
-    lastDate = datetime.datetime.today()
-    data = getStopInfos()
+    cc = 0
+    check_stops = False
+    for idx, mq in MQTT_DATA.items():
+        config_topic = TOPIC + str(idx) + "/config"
+        state_topic = TOPIC + str(idx) + "/state"
+        attribute_topic = TOPIC + str(idx) + "/attribute"
+        j_config = json.dumps(mq["config"], indent=4, sort_keys=True, ensure_ascii=False)
+
+        j_attribute = json.dumps(mq["attributes"], indent=4,sort_keys=True, ensure_ascii=False)
+        j_state = json.dumps(mq["state"], indent=4, sort_keys=True, ensure_ascii=False)
+        r_config = client.publish(config_topic, j_config, qos=0, retain=True)
+        client.publish(attribute_topic, j_attribute, qos=0, retain=True)
+        client.publish(state_topic, j_state, qos=0, retain=False)
+        status = r_config[0]
+        if status == 0:
+            print(f"Send msg to topic `{config_topic}`")
+        else:
+            print(f"Failed to send message to topic {config_topic}")
+
     while True:
-        msg = False 
-        if  checkUpdate(lastDate):
-            data = getStopInfos()
-            lastDate = datetime.datetime.today()
-        msg_data = {}
-        msg = getWaitingTimes(data)
-        if msg:
-            #msg = json.dumps(msg, indent=4, sort_keys=True, ensure_ascii=False)
-            for i, x in msg.items():
-                 #  print(msg[x]["stopName"], ": ",msg[x]['line'],' ', msg[x]['arrival'],'min')
-                 stopname = (x['stop_names'][LANG])
-                 c = []
-                 if "pt" in x:
-                     for pt in x["pt"]:
-                        p = ""
-                        lineId = pt["lineId"]
-                        ob = "L" + lineId + x['stop_id']  
-                        if ob not in c:
-                            object_id = ob + str(1)
-                            c.append(ob)
-                            p = str(1)
-                        else:
-                            object_id = ob + str(2)
-                            p = str(2)
-                            c.remove(ob)
+        pt = asyncio.run(StibData().get_passing_times(STOP_IDS))
+        passing_times = pt['passing_times']
+        for idx, mq in MQTT_DATA.items():
+            stop_id = mq["attributes"]["stop_id"]
+            line_id = mq["attributes"]["line_id"]
+            print(stop_id, line_id)
+            pt = passing_times[stop_id][line_id]
+            for p in pt:
+                m = {
+                    "arrival" : diff_in_minutes(p["expectedArrivalTime"])
+                }
+                mq['state'] = m
+                state_topic = TOPIC + idx + "/state"
+                config_topic = TOPIC + idx + "/config"
+                attribute_topic = TOPIC + idx + "/attributes"
+                j_state = json.dumps(m, indent=4, sort_keys=True, ensure_ascii=False)
+                j_attributes = json.dumps(mq['attributes'], indent=4, sort_keys=True, ensure_ascii=False)
+                #r_config = client.publish(config_topic, "", qos=0, retain=True)
+                response = client.publish(state_topic, j_state, qos=0, retain=False)
+                status = response[0]
+                if status != 0:
+                    print(f"Failed to send message to topic {state_topic}")
+                response = client.publish(attribute_topic, j_attributes, qos=0, retain=False)
+                status = response[0]
+                if status != 0:
+                    print(f"Failed to send message to topic {attribute_topic}")
 
-                        arrival = pt['minutes']
-                        destination = "INCONNUE"
-                        if "destination" in pt:
-                            destination = pt['destination'][LANG]
-                        message = ""
-                        if "message" in pt:
-                            message = pt['message']
-                        color = "UNKNOWN"
-                        route_type = "UNKNOWN"
-                        route_long_name = "UNKNOWN"
-                        if "route" in pt:
-                            color  = pt['route']['route_color']
-                            route_type  = pt['route']['route_type']
-                            route_long_name = pt['route']['route_long_name'] 
-                        eat = "UNKNOWN"
-                        eos = True
-                        if 'expectedArrivalTime' in pt:
-                            eat = pt['expectedArrivalTime']
-                            eos = False
-                        msg_data[object_id] = {"arrival" : arrival, 
-                                "color": color, 
-                                "type": route_type, 
-                                "route": route_long_name, 
-                                "destination": destination,
-                                "StopName" : stopname,
-                                "message" : message,
-                                "timestamp" : eat,
-                                "end_of_servie" : eos }
-                 
-                        topic = "homeassistant/sensor/stib" + object_id 
-                        config = topic+"/config"
-                        state = topic+"/state"
-                        mconfig = {}
-                        mconfig["device_class"] = "duration"
-                        mconfig["icon"] = "mdi:"+ msg_data[object_id]['type'].lower()
-                        mconfig["state_topic"] =  state
-                        #mconfig["state_class"] = "measurement"
-                        mconfig["unit_of_measurement"] = "min"
-                        mconfig["value_template"] =  "{{value_json.arrival}}"
-                        mconfig["unique_id"] =  "stib" + object_id
-                        mconfig["json_attributes_topic"] = "stib" 
-                        mconfig["json_attributes_template"] = "{{value_json." + object_id  + " | default('') | to_json}}"
-                        i = {}
-                        i['identifiers']=  ["stib"+ object_id ]
-                        i['name'] = "STIB " + stopname + " (" + x['stop_id'] + ") " + msg_data[object_id]['type'] + " " + lineId  + " " + str(p)
-                        mconfig["device"] = i
-                        jconfig = json.dumps(mconfig, indent=4, sort_keys=True, ensure_ascii=False)
-                        mstate = { "arrival" :arrival }
-                        jstate = json.dumps(mstate, indent=4, sort_keys=True, ensure_ascii=False)
-                        print(jconfig)
-                        #pprint.pprint(jconfig)
-                        jconfig = ""
-                        jstate = ""
-                        
-                        client.publish(config, jconfig, qos=0, retain=True)
-                        client.publish(state, jstate, qos=0, retain=False)
-                                               
-                        
-            #pprint.pprint(msg_data)
-            msg = json.dumps(msg_data, indent=4, sort_keys=True, ensure_ascii=False)
-            """ result = client.publish(mqtt_topic, msg)
-            status = result[0]
-            if status == 0:
-                print(f"Send msg to topic `{mqtt_topic}`")
-            else:
-                print(f"Failed to send message to topic {mqtt_topic}") """
-            msg_count += 1
-            print(msg_count)
-            break
-
-        # result: [0, 1]
-        
-        print("sleep")
-        time.sleep(20)
-
-def checkUpdate(lastDate):
-    today = datetime.datetime.today()
-    one_week_ago = today - timedelta(days=7)
-    if lastDate < one_week_ago:
-        return True
-    return False
-
-
-def run():
+        """ Reload data at 2:00, 8:00 & 18:00 """
+        now = datetime.datetime.now()
+        current_time = now.strftime("%H:%M:%S")
+        if current_time < "02:00:00":
+            check_stops = True
+        if current_time >= "02:00:00" and check_stops:
+            print("Reloading data 02:00")
+            init()
+            check_stops = False
+        if current_time < "08:00:00":
+            check_stops = True
+        if current_time >= "08:00:00" and check_stops:
+            print("Reloading data 08:00")
+            init()
+            check_stops = False
+        if current_time < "18:00:00":
+            check_stops = True
+        if current_time >= "18:00:00" and check_stops:
+            print("Reloading data 18:00")
+            init()
+            check_stops = False
+        time.sleep(30)
+    
+def mq_config():
     client = connect_mqtt()
     client.loop_start()
     publish(client)
 
+if __name__ == "__main__":
+    init()
+    mq_config()
 
-
-
-if __name__ == '__main__':
-
-    run()
+"""
+line[id] = []
+"""
