@@ -372,6 +372,7 @@ def init():
                             "route" : route,
                             'route_color' : route_color,
                             'timestamp' :  p["expectedArrivalTime"],
+                            'passage' : x
                         }
                     )
                     m = {
@@ -421,7 +422,11 @@ def publish(client):
             line_id = mq["attributes"]["line_id"]
             print(stop_id, line_id)
             pt = passing_times[stop_id][line_id]
+            x=0
             for p in pt:
+                x = x + 1
+                if x != mq["attributes"["passage"]:
+                    continue
                 m = {
                     "arrival" : diff_in_minutes(p["expectedArrivalTime"])
                 }
