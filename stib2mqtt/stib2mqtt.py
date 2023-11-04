@@ -402,6 +402,7 @@ def publish(client):
         state_topic = TOPIC + str(idx) + "/state"
         attribute_topic = TOPIC + str(idx) + "/attribute"
         j_config = json.dumps(mq["config"], indent=4, sort_keys=True, ensure_ascii=False)
+        #j_config  = "" #to delete entities from HA
 
         j_attribute = json.dumps(mq["attributes"], indent=4,sort_keys=True, ensure_ascii=False)
         j_state = json.dumps(mq["state"], indent=4, sort_keys=True, ensure_ascii=False)
