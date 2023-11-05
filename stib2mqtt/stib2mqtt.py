@@ -426,7 +426,7 @@ def publish(client):
             x=0
             for p in pt:
                 x = x + 1
-                if x != mq["attributes"["passage"]:
+                if x != mq["attributes"]["passage"]:
                     continue
                 m = {
                     "arrival" : diff_in_minutes(p["expectedArrivalTime"])
