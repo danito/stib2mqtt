@@ -18,7 +18,7 @@ import random
 import time
 
 LOGGER = logging.getLogger(__name__)
-with open('config.yml', 'r') as file:
+with open('config.yaml', 'r') as file:
     configuration = yaml.safe_load(file)
 
 STIB_API = "https://stibmivb.opendatasoft.com/api/explore/v2.1/catalog/datasets"
