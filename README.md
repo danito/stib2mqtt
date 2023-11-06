@@ -29,6 +29,6 @@ This will publish config, attributes and state to mqtt topic homeassistant/senso
 ##Installation
 This is a stand alone python script, not a custom component.
 ```
-pip3 install requirements
+pip3 install requirements.txt
 ```
 to install all dependencies
